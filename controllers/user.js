@@ -2,34 +2,10 @@ const Joi = require('joi').extend(require('@joi/date'));
 const User = require('../models/User');
 const Exercise = require('../models/Exercise');
 const { BadRequestError } = require('../errors');
-
-// schema for joi. Need to validate 'from' and 'to'
-const joiDateSchema = Joi.date().format([
-  'YYYY-M-D',
-  'YYYY-MM-DD',
-  'DD-MM-YYYY',
-  'D-M-YYYY',
-  'DD/MM/YYYY',
-  'D/M/YYYY',
-  'YYYY/MM/DD',
-  'YYYY/M/D',
-  'YYYY MM DD',
-  'YYYY M D',
-  'DD MM YYYY',
-  'D M YYYY',
-  'YYYY.MM.DD',
-  'YYYY.M.D',
-  'DD.MM.YYYY',
-  'D.M.YYYY',
-  'DD,MM,YYYY',
-  'D,M,YYYY',
-  'YYYY,MM,DD',
-  'YYYY,M,D',
-]);
+const { joiValidate } = require('../utils/joi');
 
 const createUser = async (req, res) => {
   const { username } = req.body;
-  //console.log('createUser\n', 'req.body = ', req.body);
   const userExists = await User.find({ username });
   if (userExists.length === 1) {
     throw new BadRequestError('User already exists');
@@ -48,7 +24,6 @@ const getAllUsers = async (req, res) => {
 
 const createUserExercise = async (req, res) => {
   // destructuring. userId is alias
-  //console.log('createUserExercise\n', 'req.body = ', req.body, ' req.params = ', req.params);
   let { description, duration, date } = req.body;
   let { id: userId } = req.params;
   duration = Number(duration);
@@ -92,20 +67,18 @@ const createUserExercise = async (req, res) => {
   });
 };
 
-const getUserLogs = async (req, res) => {
-  //console.log('getUserLogs\n', 'req.params = ', req.params, ' req.query = ', req.query);
+const getUserLogs = async (req, res, next) => {
   const { _id: userId } = req.params;
   let { from, to } = req.query;
   let fromWasValid = true;
   let toWasValid = true;
   const limit = Number(req.query.limit) || 0;
-  //console.log(joiDateSchema.validate(from));
-  const fromIsValid = from && !joiDateSchema.validate(from).hasOwnProperty('error');
+  const fromIsValid = from && !joiValidate(from).hasOwnProperty('error');
   if (!fromIsValid) {
     fromWasValid = false;
     from = new Date(0);
   }
-  const toIsValid = to && !joiDateSchema.validate(to).hasOwnProperty('error');
+  const toIsValid = to && !joiValidate(to).hasOwnProperty('error');
   if (!toIsValid) {
     toWasValid = false;
     to = new Date(Date.now());
@@ -114,7 +87,6 @@ const getUserLogs = async (req, res) => {
   if (user === null || !user) {
     throw new BadRequestError(`No user with _id ${userId} exists.`);
   }
-  //console.log('from = ', from, ' to = ', to, ' limit = ', limit);
   let exercises = await Exercise.find({
     user: userId,
     date: { $gte: from, $lte: to },
@@ -127,7 +99,6 @@ const getUserLogs = async (req, res) => {
     })
     .limit(limit)
     .sort({ date: 'desc' });
-  //console.log('exercises = ', exercises);
 
   if (exercises.length === 0 || !exercises) {
     throw new BadRequestError('User has not added any exercises');
@@ -143,6 +114,25 @@ const getUserLogs = async (req, res) => {
 
   let queries = Object.keys(req.query);
 
+  res.locals = {
+    count,
+    _id,
+    username,
+    from: new Date(from).toDateString(),
+    to: new Date(to).toDateString(),
+    exercises: prettyExercises,
+    queries,
+    fromWasValid,
+    toWasValid,
+  };
+
+  next();
+};
+
+const handleLogsResponse = async (req, res) => {
+  const { count, _id, username, from, to, exercises, queries, fromWasValid, toWasValid } =
+    res.locals;
+
   if (
     queries.includes('from') &&
     fromWasValid &&
@@ -150,52 +140,22 @@ const getUserLogs = async (req, res) => {
     toWasValid &&
     queries.includes('limit')
   ) {
-    return res.status(200).json({
-      _id,
-      username,
-      from: new Date(from).toDateString(),
-      to: new Date(to).toDateString(),
-      count,
-      log: [...prettyExercises],
-    });
+    return res.status(200).json({ _id, username, from, to, count, log: [...exercises] });
   } else if (queries.includes('from') && fromWasValid && queries.includes('to') && toWasValid) {
-    return res.status(200).json({
-      _id,
-      username,
-      from: new Date(from).toDateString(),
-      to: new Date(to).toDateString(),
-      count,
-      log: [...prettyExercises],
-    });
+    return res.status(200).json({ _id, username, from, to, count, log: [...exercises] });
   } else if (queries.includes('from') && fromWasValid && queries.includes('limit')) {
-    return res.status(200).json({
-      _id,
-      username,
-      from: new Date(from).toDateString(),
-      count,
-      log: [...prettyExercises],
-    });
+    return res.status(200).json({ _id, username, from, count, log: [...exercises] });
   } else if (queries.includes('to') && toWasValid && queries.includes('limit')) {
-    return res
-      .status(200)
-      .json({ _id, username, to: new Date(to).toDateString(), count, log: [...prettyExercises] });
+    return res.status(200).json({ _id, username, to, count, log: [...exercises] });
   } else if (queries.includes('from') && fromWasValid) {
-    return res.status(200).json({
-      _id,
-      username,
-      from: new Date(from).toDateString(),
-      count,
-      log: [...prettyExercises],
-    });
+    return res.status(200).json({ _id, username, from, count, log: [...exercises] });
   } else if (queries.includes('to') && toWasValid) {
-    return res
-      .status(200)
-      .json({ _id, username, to: new Date(to).toDateString(), count, log: [...prettyExercises] });
+    return res.status(200).json({ _id, username, to, count, log: [...exercises] });
   } else if (queries.includes('limit')) {
-    return res.status(200).json({ _id, username, count, log: [...prettyExercises] });
+    return res.status(200).json({ _id, username, count, log: [...exercises] });
   } else {
-    return res.status(200).json({ _id, username, count, log: [...prettyExercises] });
+    return res.status(200).json({ _id, username, count, log: [...exercises] });
   }
 };
 
-module.exports = { getAllUsers, createUser, createUserExercise, getUserLogs };
+module.exports = { getAllUsers, createUser, createUserExercise, getUserLogs, handleLogsResponse };
